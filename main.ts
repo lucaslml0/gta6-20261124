@@ -2,11 +2,10 @@
 // game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
 // modules, no library and no network request), and the program hands it in. It copies game/ and
 // screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. Only the plumbing, not an open world: Block
-// Dodger, a plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a
-// title screen, score, lives and levels, game over and restart, flat colours and no sound. Build
-// your own open-world crime game in its place (three.js or any library you vendor under game/),
-// put your 3 or 4 PNG or JPEG screenshots in screenshots/ (the first by name is the cover) and run it.
+// judge reads, with the vendored make.fun library. The game is Vice City Nights, a top-down
+// open-world crime game: a 3200x2400 city with roads, traffic and pedestrians, car theft and
+// driving, a 0-5 star wanted level with chasing police cars, three story missions, combat,
+// a minimap, localStorage saves and synthesised WebAudio sound — vanilla JS + canvas 2D only.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:

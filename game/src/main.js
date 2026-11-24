@@ -1,14 +1,16 @@
 // Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
 // (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
+// moves between four screens: title, play, paused and game over. Cash and mission progress save
+// to localStorage, so Continue on the title screen picks up where you left off.
 //
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
+// ?seed=N fixes the city layout. ?shot=start|play|end (with &seed=N) stages that scene instead
+// of running the loop, paints it twice and sets window.__shotReady for a screenshot.
+import { SAVE_KEY, STEP } from './config.js';
 import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
+import { createWorld, EVENT_HIT, EVENT_MISSION, EVENT_OVER, EVENT_WANTED } from './world.js';
+import { ACTION_ATTACK, ACTION_CONFIRM, ACTION_ENTER, ACTION_PAUSE, createInput } from './input.js';
 import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+import { initAudio, sfx, updateAudio } from './audio.js';
 import { stageShot } from './shots.js';
 
 /** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
@@ -24,66 +26,91 @@ const status = document.getElementById('status');
 const world = createWorld(createRandom(seed));
 const renderer = createRenderer(canvas);
 
-function readBest() {
+function readSave() {
   try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
+    const raw = window.localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const save = JSON.parse(raw);
+    if (typeof save.cash !== 'number' || typeof save.missionIndex !== 'number') return null;
+    return save;
   } catch {
-    return 0;
+    return null;
   }
 }
 
-function saveBest(value) {
+function writeSave() {
   try {
-    window.localStorage.setItem(BEST_KEY, String(value));
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({ cash: world.state.cash, missionIndex: world.state.missionIndex }));
   } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
+    // Storage can be off (private windows): progress then lasts this visit only.
   }
 }
 
 function runShot(name) {
   const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
+  // Paint synchronously (twice, like the frame loop would): headless screenshot runs may
+  // capture before a requestAnimationFrame callback ever fires.
+  renderer.draw(world.state, scene.screen, scene.save);
+  renderer.draw(world.state, scene.screen, scene.save);
+  window.__shotReady = true;
 }
 
 function runGame() {
-  const input = createInput(canvas);
+  const input = createInput(canvas, renderer.toLogical);
   let screen = SCREEN_TITLE;
-  let best = readBest();
+  let save = readSave();
   let accumulator = 0;
   let last = performance.now();
+  let buttons = [];
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
   function announce(message) {
     status.textContent = message;
   }
 
-  function startGame() {
+  function startGame(fresh) {
     world.reset();
+    if (!fresh && save) world.loadProgress(save);
     accumulator = 0;
     screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
+    initAudio();
+    announce(`Playing. Mission ${world.state.missionIndex + 1} of 3.`);
   }
 
   function endGame() {
     screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
-    }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
+    writeSave();
+    const over = world.state.over;
+    announce(over === 'complete' ? `You own the city. Cash $${world.state.cash}.` : over === 'busted' ? 'Busted by the cops.' : 'Wasted.');
+    if (over !== 'complete') sfx.busted();
   }
 
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
+  function handleActions(actions) {
+    const pointer = input.pointer();
+    if (screen === SCREEN_TITLE) {
+      if (actions & ACTION_CONFIRM) {
+        // A click on a button wins over a bare keypress.
+        if (pointer.down) {
+          for (const b of buttons) {
+            if (pointer.x >= b.x && pointer.x <= b.x + b.w && pointer.y >= b.y && pointer.y <= b.y + b.h) {
+              startGame(b.id === 'start');
+              return;
+            }
+          }
+        }
+        startGame(!save || save.missionIndex === 0);
+      }
+      return;
+    }
+    if (screen === SCREEN_OVER) {
+      if (actions & ACTION_CONFIRM) {
+        world.reset();
+        screen = SCREEN_TITLE;
+        save = readSave();
+        announce('Vice City Nights. Press Enter or click Start.');
+      }
+      return;
+    }
+    if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
       announce('Paused.');
     } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
@@ -92,41 +119,64 @@ function runGame() {
     }
   }
 
-  function step() {
+  function step(actions) {
     if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
+      world.step(STEP, { mx: 0, my: 0, enter: false, attack: false }, true);
       return;
     }
-    const events = world.step(STEP, input.direction(), false);
+    const vec = input.vector();
+    const events = world.step(STEP, {
+      mx: vec.x,
+      my: vec.y,
+      enter: Boolean(actions & ACTION_ENTER),
+      attack: Boolean(actions & ACTION_ATTACK),
+    }, false);
+    if (events & EVENT_MISSION) {
+      sfx.mission();
+      writeSave();
+      save = readSave();
+    }
+    if (events & EVENT_WANTED) sfx.crash();
+    if (events & EVENT_HIT) sfx.crash();
     if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
+    if (world.state.saveDirty) {
+      world.state.saveDirty = false;
+      writeSave();
+      save = readSave();
+    }
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
     accumulator += Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
-    handleActions();
+    const actions = input.takeActions();
+    handleActions(actions);
     if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
+      let first = true;
       while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
+        step(first ? actions : 0);
+        first = false;
         accumulator -= STEP;
       }
     } else {
       accumulator = 0;
     }
-    renderer.draw(world.state, screen, best);
+    updateAudio(world.state.player.speed / 460, world.state.wanted, 1 / 60);
+    buttons = renderer.draw(world.state, screen, save) || [];
   }
 
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
       announce('Paused.');
     }
   });
+  // First gesture unlocks audio.
+  window.addEventListener('pointerdown', initAudio, { once: true });
+  window.addEventListener('keydown', initAudio, { once: true });
 
-  announce('Block Dodger. Press Space or click to start.');
+  announce('Vice City Nights. Press Enter or click Start.');
   requestAnimationFrame(frame);
 }
 
