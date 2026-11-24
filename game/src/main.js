@@ -28,12 +28,12 @@ const renderer = createRenderer(canvas);
 const ctx = canvas.getContext('2d');
 let frameCount = 0;
 
-/** Subtle speed lines streaking past the screen edges while driving above 180. */
+/** Subtle speed lines streaking past the screen edges while driving above 160. */
 function drawSpeedLines(currentScreen) {
   if (currentScreen !== SCREEN_PLAY) return;
   const speed = world.state.player.speed;
-  if (speed < 180) return;
-  const ratio = Math.min(1, (speed - 180) / 240);
+  if (speed < 160) return;
+  const ratio = Math.min(1, (speed - 160) / 240);
   const w = canvas.width;
   const h = canvas.height;
   ctx.save();
