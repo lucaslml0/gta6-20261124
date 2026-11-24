@@ -25,6 +25,32 @@ const canvas = document.getElementById('game');
 const status = document.getElementById('status');
 const world = createWorld(createRandom(seed));
 const renderer = createRenderer(canvas);
+const ctx = canvas.getContext('2d');
+let frameCount = 0;
+
+/** Subtle speed lines streaking past the screen edges while driving fast. */
+function drawSpeedLines(currentScreen) {
+  if (currentScreen !== SCREEN_PLAY) return;
+  const speed = world.state.player.speed;
+  if (speed < 220) return;
+  const ratio = Math.min(1, (speed - 220) / 240);
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.strokeStyle = `rgba(255, 255, 255, ${0.10 + 0.25 * ratio})`;
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 6; i++) {
+    const y = (((frameCount * 37 + i * 173) % 1000) / 1000) * h;
+    const len = 40 + ratio * 90;
+    const x = i % 2 === 0 ? 8 : w - 8 - len;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + len, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 function readSave() {
   try {
@@ -164,6 +190,8 @@ function runGame() {
     }
     updateAudio(world.state.player.speed / 460, world.state.wanted, 1 / 60);
     buttons = renderer.draw(world.state, screen, save) || [];
+    frameCount++;
+    drawSpeedLines(screen);
   }
 
   document.addEventListener('visibilitychange', () => {
